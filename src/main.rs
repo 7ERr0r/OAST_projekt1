@@ -59,6 +59,9 @@ fn czesc1(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
             // Średnia i przedział ufności
             let (average, confidence) = avg_confidence(&averages);
 
+            println!("predicted delay: {:.4} [s]", predicted);
+            println!("average   delay: {:.4} +- {:.4} [s]", average, confidence);
+
             // Zwracamy wynik do wykresów
             SystemDelayStats {
                 lambda,
@@ -86,6 +89,9 @@ fn czesc2(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
 
             // Średnia i przedział ufności
             let (average, confidence) = avg_confidence(&averages);
+
+            println!("predicted delay: {:.4} [s]", predicted);
+            println!("average   delay: {:.4} +- {:.4} [s]", average, confidence);
 
             // Zwracamy wynik do wykresów
             SystemDelayStats {
@@ -137,21 +143,19 @@ fn simulate(part: OastPart, simulations: usize, event_spawn_lambda: f64) -> (f64
         .map(|m| m.cumulative_delay / m.processed_notifications as f64)
         .collect();
 
-    // Przedział ufności
-    let (avg, confidence) = avg_confidence(&averages);
 
+    // Przewidywane opóźnienie
     let predicted = match part {
+        // Dla części 1 wzór jest prosty
         OastPart::Part1 => Oast::prediction_e_always_on(&params),
+
+        // Dla części 2 serwer się włącza i wyłącza
         OastPart::Part2 => Oast::prediction_e_t_on_off(&params, &derived),
     };
-
+    
     // write_averages(&averages)?;
     // let histogram = make_histogram(&averages);
-    // write_histogram(&histogram)?;
-
-    println!("predicted delay: {:.4} [s]", predicted);
-
-    println!("average   delay: {:.4} +- {:.4} [s]", avg, confidence);
+    // write_histogram(&histogram)?;    
 
     (predicted, averages)
 }
