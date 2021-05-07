@@ -1,38 +1,140 @@
-use std::collections::BTreeMap;
-use std::io::Write;
-use std::fs::File;
 use core::cmp::Ordering;
+use itertools_num::linspace;
+use rayon::prelude::*;
+use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
 use std::collections::VecDeque;
-use rayon::prelude::*;
+use std::fs::File;
+use std::io::Write;
+use std::ops::Range;
 
 fn main() -> std::io::Result<()> {
-    let simulations = 100000;
+    let oast_part: &str = &std::env::args().nth(1).unwrap_or("czesc1".to_string());
 
-    let outs: Vec<Measurements> = (0..simulations).into_par_iter().map(|_|{
-        let mut oast = Oast::new();
+    match oast_part {
+        "czesc1" => {
+            czesc1(0.5..6.0, 30)?;
+        }
+        "czesc2" => {
+            czesc2(0.5..4.0, 36)?;
+        }
+        "czesc2dodatek" => {
+            czesc2dodatek_xy(0.5..4.0, 360)?;
+        }
+        _ => {}
+    };
 
-        oast.run();
-        return oast.measurements
-    }).collect();
+    Ok(())
+}
+#[derive(Eq, PartialEq, Clone, Copy)]
+enum OastPart {
+    Part1,
+    Part2,
+}
 
-    println!("predicted delay: {:.4} [s]", Oast::prediction_e_t_on_off());
+struct SystemDelayStats {
+    // Parametr lambda dla ktorego mierzylismy
+    lambda: f64,
 
+    // Przewidywane opoznienie w systemie
+    predicted: f64,
 
-    let averages: Vec<f64> = outs.iter().map(|m| m.cumulative_delay / m.processed_notifications as f64).collect();
+    // Srednie opoznienie w systemie
+    average: f64,
 
+    // Przedzial ufnosci +-
+    confidence: f64,
+}
 
-    write_averages(&averages)?;
-    let histogram = make_histogram(&averages);
-    write_histogram(&histogram)?;
+fn czesc1(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
+    let simulations = 200;
 
+    let stats: Vec<SystemDelayStats> = linspace::<f64>(lambdas.start, lambdas.end, n)
+        .into_iter()
+        .map(|lambda| {
+            let (predicted, averages) = simulate(OastPart::Part1, simulations, lambda);
 
+            let (average, confidence) = avg_confidence(&averages);
+
+            SystemDelayStats {
+                lambda,
+                predicted,
+                average,
+                confidence,
+            }
+        })
+        .collect();
+
+    write_lambda_delay_stats("czesc1_lambda_delay.txt", &stats)?;
+
+    Ok(())
+}
+
+fn czesc2(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
+    let simulations = 2000;
+
+    let stats: Vec<SystemDelayStats> = linspace::<f64>(lambdas.start, lambdas.end, n)
+        .into_iter()
+        .map(|lambda| {
+            let (predicted, averages) = simulate(OastPart::Part2, simulations, lambda);
+
+            let (average, confidence) = avg_confidence(&averages);
+
+            SystemDelayStats {
+                lambda,
+                predicted,
+                average,
+                confidence,
+            }
+        })
+        .collect();
+
+    write_lambda_delay_stats("czesc2_lambda_delay.txt", &stats)?;
+
+    Ok(())
+}
+
+fn simulate(part: OastPart, simulations: usize, event_spawn_lambda: f64) -> (f64, Vec<f64>) {
+    let params = JobParams {
+        part: part,
+        expected_server_on__seconds: 40.0,
+        expected_server_off_seconds: 35.0,
+        event_processing_mu: 8.0,
+        event_spawn__lambda: event_spawn_lambda,
+    };
+    let derived = DerivedParams::new(&params);
+
+    let outs: Vec<Measurements> = (0..simulations)
+        .into_par_iter()
+        .map(|_| {
+            let mut oast = Oast::new(params.clone(), derived.clone());
+
+            oast.run();
+            return oast.measurements;
+        })
+        .collect();
+
+    let averages: Vec<f64> = outs
+        .iter()
+        .map(|m| m.cumulative_delay / m.processed_notifications as f64)
+        .collect();
 
     let (avg, delta) = avg_confidence(&averages);
 
+    let predicted = match part {
+        OastPart::Part1 => Oast::prediction_e_always_on(&params),
+        OastPart::Part2 => Oast::prediction_e_t_on_off(&params, &derived),
+    };
+
+    // write_averages(&averages)?;
+    // let histogram = make_histogram(&averages);
+    // write_histogram(&histogram)?;
+
+    println!("predicted delay: {:.4} [s]", predicted);
+
     println!("average   delay: {:.4} +- {:.4} [s]", avg, delta);
 
-    Ok(())
+    (predicted, averages)
 }
 
 fn avg_confidence(values: &[f64]) -> (f64, f64) {
@@ -50,60 +152,25 @@ fn avg_confidence(values: &[f64]) -> (f64, f64) {
     // for 95% confidence
     let z = 1.960;
 
-    let plus_minus_delta = z * stdev / sqrt_len;
+    let confidence = z * stdev / sqrt_len;
 
-    return (ex, plus_minus_delta)
+    return (ex, confidence);
 }
 
-fn make_histogram(outs: &[f64]) -> BTreeMap<i64, i64> {
-    let mut map = BTreeMap::new();
+fn write_lambda_delay_stats(filename: &str, outs: &[SystemDelayStats]) -> std::io::Result<()> {
+    let mut file = File::create(filename)?;
 
-    for avg_delay in outs {
-        let key = avg_delay.floor() as i64;
-
-        map.entry(key).and_modify(|v| *v += 1).or_insert(1);
+    write!(file, "lambda\tpredicted\taverage\tconfidence\n")?;
+    for s in outs {
+        write!(
+            file,
+            "{:.5}\t{:.5}\t{:.5}\t{:.5}\n",
+            s.lambda, s.predicted, s.average, s.confidence
+        )?;
     }
 
-    map
+    Ok(())
 }
-
-
-
-fn write_averages(outs: &[f64])  -> std::io::Result<()> {
-    let mut file = File::create("results.txt")?;
-
-    for avg_delay in outs {
-        write!(file, "{:.5}\n", avg_delay)?;
-    }
-
-    Ok(()) 
-}
-
-fn write_histogram(histogram: &BTreeMap<i64, i64>)  -> std::io::Result<()> {
-    let mut file = File::create("histogram.txt")?;
-
-    for entry in histogram {
-        write!(file, "{}\t{}\n", entry.0, entry.1)?;
-    }
-
-    Ok(()) 
-}
-
-// Parametry zadania
-// co ile [s] tworzy sie zdarzenie
-const EXPECTED_SERVER_ON__SECONDS: f64 = 40.0; // E C_on
-const EXPECTED_SERVER_OFF_SECONDS: f64 = 35.0; // E C_off
-
-const PROBABILITY_SERVER_ON_: f64 =
-    EXPECTED_SERVER_ON__SECONDS / (EXPECTED_SERVER_ON__SECONDS + EXPECTED_SERVER_OFF_SECONDS);
-const PROBABILITY_SERVER_OFF: f64 =
-    EXPECTED_SERVER_OFF_SECONDS / (EXPECTED_SERVER_ON__SECONDS + EXPECTED_SERVER_OFF_SECONDS);
-
-const EVENT_PROCESSING_MU: f64 = 8.0; // mu
-const EVENT_SPAWN__LAMBDA: f64 = 0.5; // lambda
-
-const EXPECTED_EVENT_PROCESSING_SECONDS: f64 = 1.0 / EVENT_PROCESSING_MU; // D = 1 / mu
-const EXPECTED_EVENT_SPAWNING___SECONDS: f64 = 1.0 / EVENT_SPAWN__LAMBDA; // 1 / lambda
 
 const TIME_QUANTIZATION: u64 = 100000000;
 
@@ -232,30 +299,78 @@ struct SimulatedServer {
     processing: bool,
 }
 
+// Parametry zadania
+#[allow(non_snake_case)]
+#[derive(Clone)]
+struct JobParams {
+    part: OastPart,
+    // co ile [s] tworzy sie zdarzenie
+    // E C_on
+    // Przykladowo: 40.0
+    expected_server_on__seconds: f64,
+
+    // E C_off
+    // Przykladowo: 35.0
+    expected_server_off_seconds: f64,
+
+    // mu
+    // Przykladowo: 8.0
+    event_processing_mu: f64,
+
+    // lambda
+    // Przykladowo: 0.5
+    event_spawn__lambda: f64,
+}
+
+// Parametry pomocnicze
+#[derive(Clone)]
+struct DerivedParams {
+    probability_server_on_: f64,
+    probability_server_off: f64,
+
+    expected_event_processing_seconds: f64,
+    expected_event_spawning___seconds: f64,
+}
+impl DerivedParams {
+    pub fn new(params: &JobParams) -> Self {
+        let on_off_sum = params.expected_server_on__seconds + params.expected_server_off_seconds;
+        Self {
+            probability_server_on_: params.expected_server_on__seconds / on_off_sum,
+            probability_server_off: params.expected_server_off_seconds / on_off_sum,
+
+            expected_event_processing_seconds: 1.0 / params.event_processing_mu, // d = 1 / mu
+            expected_event_spawning___seconds: 1.0 / params.event_spawn__lambda, // 1 / lambda
+        }
+    }
+}
+
 struct Oast {
     events: OastQueue,
     measurements: Measurements,
     server: SimulatedServer,
     simulation_time: f64,
-    czesc2: bool,
     debug: bool,
+
+    params: JobParams,
+    dparams: DerivedParams,
 }
 impl Oast {
-    fn new() -> Self {
+    fn new(job_params: JobParams, derived_params: DerivedParams) -> Self {
         Self {
             events: OastQueue::new(),
             measurements: Measurements::default(),
             server: SimulatedServer::default(),
-            simulation_time: 10.0 * 3600.0,
-            czesc2: true,
+            simulation_time: 40.0 * 3600.0,
             debug: false,
+            params: job_params,
+            dparams: derived_params,
         }
     }
     fn run(&mut self) {
         // Pierwsze zgloszenie
         self.events.put(0.0001, Event::Notify);
 
-        if self.czesc2 {
+        if self.params.part == OastPart::Part2 {
             // Dla czesci II musimy symulowac serwer ON/OFF
             // Wrzucenie pierwszego eventu powoduje symulacje serwera
             self.events.put(0.0000, Event::ServerOn);
@@ -265,7 +380,7 @@ impl Oast {
         }
 
         // rozbieg
-        let starter_duration = EXPECTED_SERVER_OFF_SECONDS * 2.0;
+        let starter_duration = self.params.expected_server_off_seconds * 2.0;
         {
             // chwile symulujemy
             self.run_until(starter_duration);
@@ -273,13 +388,11 @@ impl Oast {
             self.measurements = Measurements::default();
         }
 
-
         // wlasciwa symulacja
         self.run_until(starter_duration + self.simulation_time);
 
         self.print_measurements();
     }
-
 
     fn run_until(&mut self, finish_time: f64) {
         loop {
@@ -320,15 +433,25 @@ impl Oast {
                 m.cumulative_delay / m.processed_notifications as f64
             );
         }
-
-        
     }
 
-    fn prediction_e_t_on_off() -> f64 {
-        let la = EVENT_SPAWN__LAMBDA; // lambda
-        let mu = EVENT_PROCESSING_MU; // mu
-        let p_prim = la / (mu * PROBABILITY_SERVER_ON_);
-        let a = p_prim + la * EXPECTED_SERVER_OFF_SECONDS * PROBABILITY_SERVER_OFF;
+    fn prediction_e_always_on(p: &JobParams) -> f64 {
+        let la = p.event_spawn__lambda; // lambda
+        let mu = p.event_processing_mu; // mu
+        let p_prim = la / mu;
+        let a = p_prim;
+        let b = (1.0 - p_prim) * la;
+
+        let expected_t_on_off = a / b;
+
+        return expected_t_on_off;
+    }
+
+    fn prediction_e_t_on_off(p: &JobParams, dp: &DerivedParams) -> f64 {
+        let la = p.event_spawn__lambda; // lambda
+        let mu = p.event_processing_mu; // mu
+        let p_prim = la / (mu * dp.probability_server_on_);
+        let a = p_prim + la * p.expected_server_off_seconds * dp.probability_server_off;
         let b = (1.0 - p_prim) * la;
 
         let expected_t_on_off = a / b;
@@ -361,7 +484,7 @@ impl Oast {
 
                 // tworzymy kolejne
                 self.events.put(
-                    t + poisson(EXPECTED_EVENT_SPAWNING___SECONDS),
+                    t + poisson(self.dparams.expected_event_spawning___seconds),
                     Event::Notify,
                 );
 
@@ -373,7 +496,7 @@ impl Oast {
 
                 // serwer pozniej zakonczy przetwarzanie
                 self.events.put(
-                    t + poisson(EXPECTED_EVENT_PROCESSING_SECONDS),
+                    t + poisson(self.dparams.expected_event_processing_seconds),
                     Event::ProcessingEnd,
                 );
             }
@@ -393,14 +516,14 @@ impl Oast {
             Event::ServerOn => {
                 // Serwer teraz ON wiec kolejkujemy OFF
                 self.server.running = true;
-                let on_duration = poisson(EXPECTED_SERVER_ON__SECONDS);
+                let on_duration = poisson(self.params.expected_server_on__seconds);
                 self.events.put(t + on_duration, Event::ServerOff);
                 self.try_start_processing(t);
             }
             Event::ServerOff => {
                 // Serwer teraz OFF wiec kolejkujemy ON
                 self.server.running = false;
-                let off_duration = poisson(EXPECTED_SERVER_OFF_SECONDS);
+                let off_duration = poisson(self.params.expected_server_off_seconds);
                 self.events.put(t + off_duration, Event::ServerOn);
 
                 let new_events: Vec<TimeEvent> = self
@@ -425,4 +548,70 @@ impl Oast {
             }
         }
     }
+}
+
+// --------- Ponizej kod niewymagany ------------
+
+fn make_histogram(outs: &[f64]) -> BTreeMap<i64, i64> {
+    let mut map = BTreeMap::new();
+
+    for avg_delay in outs {
+        let key = avg_delay.floor() as i64;
+
+        map.entry(key).and_modify(|v| *v += 1).or_insert(1);
+    }
+
+    map
+}
+fn write_averages(outs: &[f64]) -> std::io::Result<()> {
+    let mut file = File::create("results.txt")?;
+
+    for avg_delay in outs {
+        write!(file, "{:.5}\n", avg_delay)?;
+    }
+
+    Ok(())
+}
+
+fn write_histogram(histogram: &BTreeMap<i64, i64>) -> std::io::Result<()> {
+    let mut file = File::create("histogram.txt")?;
+
+    for entry in histogram {
+        write!(file, "{}\t{}\n", entry.0, entry.1)?;
+    }
+
+    Ok(())
+}
+
+struct LambdaAndAverage {
+    lambda: f64,
+    average: f64,
+}
+fn czesc2dodatek_xy(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
+    let simulations = 200;
+
+    let mut stats: Vec<LambdaAndAverage> = Vec::new();
+
+    for lambda in linspace::<f64>(lambdas.start, lambdas.end, n) {
+        let (_predicted, averages) = simulate(OastPart::Part2, simulations, lambda);
+
+        for average in averages {
+            stats.push(LambdaAndAverage { lambda, average });
+        }
+    }
+
+    write_dodatek_xy_plot("czesc2dodatek_lambda_delay.txt", &stats)?;
+
+    Ok(())
+}
+
+fn write_dodatek_xy_plot(filename: &str, outs: &[LambdaAndAverage]) -> std::io::Result<()> {
+    let mut file = File::create(filename)?;
+
+    write!(file, "lambda\taverage\n")?;
+    for s in outs {
+        write!(file, "{:.5}\t{:.5}\n", s.lambda, s.average,)?;
+    }
+
+    Ok(())
 }
