@@ -49,13 +49,17 @@ struct SystemDelayStats {
 fn czesc1(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
     let simulations = 200;
 
+    // linspace przykladowo od 0.5 do 6
     let stats: Vec<SystemDelayStats> = linspace::<f64>(lambdas.start, lambdas.end, n)
         .into_iter()
         .map(|lambda| {
+            // Symulujemy dla jednej lambdy
             let (predicted, averages) = simulate(OastPart::Part1, simulations, lambda);
 
+            // Średnia i przedział ufności
             let (average, confidence) = avg_confidence(&averages);
 
+            // Zwracamy wynik do wykresów
             SystemDelayStats {
                 lambda,
                 predicted,
@@ -73,13 +77,17 @@ fn czesc1(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
 fn czesc2(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
     let simulations = 2000;
 
+    // linspace przykladowo od 0.5 do 4
     let stats: Vec<SystemDelayStats> = linspace::<f64>(lambdas.start, lambdas.end, n)
         .into_iter()
         .map(|lambda| {
+            // Symulujemy dla jednej lambdy
             let (predicted, averages) = simulate(OastPart::Part2, simulations, lambda);
 
+            // Średnia i przedział ufności
             let (average, confidence) = avg_confidence(&averages);
 
+            // Zwracamy wynik do wykresów
             SystemDelayStats {
                 lambda,
                 predicted,
@@ -94,6 +102,8 @@ fn czesc2(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
     Ok(())
 }
 
+// Zwraca przewidziane opóźnienie
+// oraz wyniki z wielu symulacji
 fn simulate(part: OastPart, simulations: usize, event_spawn_lambda: f64) -> (f64, Vec<f64>) {
     // Parametry podane w zadaniu
     let params = JobParams {
