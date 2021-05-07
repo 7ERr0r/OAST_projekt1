@@ -95,6 +95,7 @@ fn czesc2(lambdas: Range<f64>, n: usize) -> std::io::Result<()> {
 }
 
 fn simulate(part: OastPart, simulations: usize, event_spawn_lambda: f64) -> (f64, Vec<f64>) {
+    // Parametry podane w zadaniu
     let params = JobParams {
         part: part,
         expected_server_on__seconds: 40.0,
@@ -102,24 +103,32 @@ fn simulate(part: OastPart, simulations: usize, event_spawn_lambda: f64) -> (f64
         event_processing_mu: 8.0,
         event_spawn__lambda: event_spawn_lambda,
     };
+    // Obliczamy parametry (czasy obsługi),
+    // które wynikają z poprzednich
     let derived = DerivedParams::new(&params);
 
     let outs: Vec<Measurements> = (0..simulations)
         .into_par_iter()
         .map(|_| {
+            // Tworzymy nową symulację
             let mut oast = Oast::new(params.clone(), derived.clone());
 
+            // Obliczenia zajmują dość dużo czasu
             oast.run();
+
+            // Zwracamy wyniki/pomiary
             return oast.measurements;
         })
         .collect();
 
+    // Średnie opóźnienia dla każdej z symulacji
     let averages: Vec<f64> = outs
         .iter()
         .map(|m| m.cumulative_delay / m.processed_notifications as f64)
         .collect();
 
-    let (avg, delta) = avg_confidence(&averages);
+    // Przedział ufności
+    let (avg, confidence) = avg_confidence(&averages);
 
     let predicted = match part {
         OastPart::Part1 => Oast::prediction_e_always_on(&params),
@@ -132,11 +141,12 @@ fn simulate(part: OastPart, simulations: usize, event_spawn_lambda: f64) -> (f64
 
     println!("predicted delay: {:.4} [s]", predicted);
 
-    println!("average   delay: {:.4} +- {:.4} [s]", avg, delta);
+    println!("average   delay: {:.4} +- {:.4} [s]", avg, confidence);
 
     (predicted, averages)
 }
 
+// Zwraca średnią oraz przedział ufności
 fn avg_confidence(values: &[f64]) -> (f64, f64) {
     let len = values.len() as f64;
     let sqrt_len = len.sqrt();
@@ -157,6 +167,7 @@ fn avg_confidence(values: &[f64]) -> (f64, f64) {
     return (ex, confidence);
 }
 
+// Zapis średnich opóźnień i przedziałów ufności do pliku
 fn write_lambda_delay_stats(filename: &str, outs: &[SystemDelayStats]) -> std::io::Result<()> {
     let mut file = File::create(filename)?;
 
@@ -172,6 +183,7 @@ fn write_lambda_delay_stats(filename: &str, outs: &[SystemDelayStats]) -> std::i
     Ok(())
 }
 
+// Sortujemy po int-ach, nie float-ach
 const TIME_QUANTIZATION: u64 = 100000000;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -217,6 +229,7 @@ impl PartialOrd for TimeEvent {
 }
 
 impl TimeEvent {
+    // Przesuwa zdarzenie w czasie
     fn add_time(&self, duration: f64) -> TimeEvent {
         TimeEvent {
             time: self.time + ((duration * TIME_QUANTIZATION as f64) as u64),
@@ -270,21 +283,26 @@ fn poisson(lambda_inverse: f64) -> f64 {
     return -lambda_inverse * (1.0 - rng.gen::<f64>()).ln();
 }
 
+// Pomiary do których symulator zapisuje liczbę zgłoszeń
 #[derive(Default, Debug)]
 struct Measurements {
+    // Liczba stworzonych zgłoszeń
     spawned_notifications: i64,
+
+    // Liczba przetworzonych zgłoszeń
     processed_notifications: i64,
+
+    // Sumaryczne opóźnienie wszystkich
+    // dotychczas przetworzonych zgłoszeń
     cumulative_delay: f64,
 }
 
+// Zgłoszenie
+// Struktura używana w kolejce serwera
 #[derive(Default)]
 struct Notification {
+    // Czas, kiedy zgłoszenie zostało zakolejkowane
     time_queued: f64,
-}
-impl Notification {
-    fn new(time_queued: f64) -> Self {
-        Self { time_queued }
-    }
 }
 
 #[derive(Default)]
@@ -333,6 +351,7 @@ struct DerivedParams {
 }
 impl DerivedParams {
     pub fn new(params: &JobParams) -> Self {
+        // Parametry które wynikają z tych podanych w zadaniu
         let on_off_sum = params.expected_server_on__seconds + params.expected_server_off_seconds;
         Self {
             probability_server_on_: params.expected_server_on__seconds / on_off_sum,
@@ -344,14 +363,23 @@ impl DerivedParams {
     }
 }
 
+// Struktura jednej symulacji
 struct Oast {
+    // Kolejka symulacji
     events: OastQueue,
+    // Pomiary
     measurements: Measurements,
+    // Serwer symulowany
     server: SimulatedServer,
+
+    // Jak długo ma trwać symulacja
     simulation_time: f64,
     debug: bool,
 
+    // Parametry z zadania
     params: JobParams,
+
+    // Inne parametry, obliczone
     dparams: DerivedParams,
 }
 impl Oast {
@@ -394,6 +422,8 @@ impl Oast {
         self.print_measurements();
     }
 
+    // Symuluje aż do momentu:
+    // finish_time [s]
     fn run_until(&mut self, finish_time: f64) {
         loop {
             match self.events.get() {
@@ -418,6 +448,7 @@ impl Oast {
         }
     }
 
+    // Dodatkowe debugi
     fn print_measurements(&mut self) {
         let m = &self.measurements;
 
@@ -435,6 +466,8 @@ impl Oast {
         }
     }
 
+    // Przewidywane opóźnienie dla czesci 1
+    // (serwer zawsze ON)
     fn prediction_e_always_on(p: &JobParams) -> f64 {
         let la = p.event_spawn__lambda; // lambda
         let mu = p.event_processing_mu; // mu
@@ -447,6 +480,8 @@ impl Oast {
         return expected_t_on_off;
     }
 
+    // Przewidywane opóźnienie dla czesci 2
+    // (serwer ON/OFF)
     fn prediction_e_t_on_off(p: &JobParams, dp: &DerivedParams) -> f64 {
         let la = p.event_spawn__lambda; // lambda
         let mu = p.event_processing_mu; // mu
@@ -459,6 +494,8 @@ impl Oast {
         return expected_t_on_off;
     }
 
+    // Próba rozpoczęcia przetwarzania zgłoszenia
+    // przez serwer
     fn try_start_processing(&mut self, now: f64) {
         if self.server.running {
             if self.server.queue.len() == 0 {
@@ -476,6 +513,7 @@ impl Oast {
         }
     }
 
+    // Przetwarza zdarzenie teraz i kolejkuje kolejne
     fn process_event(&mut self, t: f64, event: Event) {
         match event {
             Event::Notify => {
@@ -488,7 +526,7 @@ impl Oast {
                     Event::Notify,
                 );
 
-                self.server.queue.push_back(Notification::new(t));
+                self.server.queue.push_back(Notification { time_queued: t });
                 self.try_start_processing(t);
             }
             Event::ProcessingStart => {
